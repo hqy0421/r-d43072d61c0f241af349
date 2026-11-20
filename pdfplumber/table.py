@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Type, U
 
 from . import utils
 from ._typing import T_bbox, T_num, T_obj, T_obj_iter, T_obj_list, T_point
+from .table_spans import SpanSettings, SpanTable, T_span_settings, span_grid
 
 DEFAULT_SNAP_TOLERANCE = 3
 DEFAULT_JOIN_TOLERANCE = 3
@@ -455,6 +456,35 @@ class Table(object):
             table_arr.append(arr)
 
         return table_arr
+
+    def span_grid(self, span_settings: Optional[T_span_settings] = None) -> SpanTable:
+        """Reconstruct this table as an explicit grid that records merged cells.
+
+        The native cell rectangles are clustered into row/column boundaries
+        using the tolerance in ``span_settings``; each cell then reports its
+        ``row``/``col``, ``rowspan``/``colspan``, physical ``bbox`` and text,
+        while every grid position reports whether it is an anchor, covered by
+        a merged neighbour, missing, or geometrically conflicted.
+
+        This does not change :meth:`extract`, which keeps its original
+        two-dimensional behavior.
+
+        :param span_settings: A :class:`pdfplumber.table_spans.SpanSettings`
+            instance or a dict of its fields (plus ``text_*`` keys, which are
+            forwarded to text extraction).
+        """
+        return span_grid(self, span_settings)
+
+    def extract_spans(
+        self, span_settings: Optional[T_span_settings] = None, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Return the span-aware export of this table as a plain dictionary.
+
+        Equivalent to ``self.span_grid(span_settings).to_dict()``, with
+        optional keyword arguments applied as text-extraction settings.
+        """
+        settings = SpanSettings.resolve(span_settings).with_text_settings(kwargs)
+        return span_grid(self, settings).to_dict()
 
 
 TABLE_STRATEGIES = ["lines", "lines_strict", "text", "explicit"]

@@ -35,6 +35,7 @@ from ._typing import T_bbox, T_num, T_obj, T_obj_list
 from .container import Container
 from .structure import PDFStructTree, StructTreeMissing
 from .table import T_table_settings, Table, TableFinder, TableSettings
+from .table_spans import SpanSettings, T_span_settings
 from .utils import decode_text, resolve_all, resolve_and_decode
 from .utils.exceptions import MalformedPDFException, PdfminerException
 from .utils.text import TextMap
@@ -494,6 +495,38 @@ class Page(Container):
             return None
         else:
             return table.extract(**(tset.text_settings or {}))
+
+    def extract_tables_with_spans(
+        self,
+        table_settings: Optional[T_table_settings] = None,
+        span_settings: Optional[T_span_settings] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return span-aware exports for every table found on the page.
+
+        Each item is the dictionary produced by ``Table.extract_spans(...)``.
+        The ``text_*`` settings supplied via ``table_settings`` are used for
+        per-cell text extraction unless ``span_settings`` overrides them.
+        """
+        tset = TableSettings.resolve(table_settings)
+        spans = SpanSettings.resolve(span_settings).with_fallback_text_settings(
+            tset.text_settings or {}
+        )
+        return [table.span_grid(spans).to_dict() for table in self.find_tables(tset)]
+
+    def extract_table_with_spans(
+        self,
+        table_settings: Optional[T_table_settings] = None,
+        span_settings: Optional[T_span_settings] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Span-aware export of the largest table on the page, or ``None``."""
+        tset = TableSettings.resolve(table_settings)
+        table = self.find_table(tset)
+        if table is None:
+            return None
+        spans = SpanSettings.resolve(span_settings).with_fallback_text_settings(
+            tset.text_settings or {}
+        )
+        return table.span_grid(spans).to_dict()
 
     def _get_textmap(self, **kwargs: Any) -> TextMap:
         defaults: Dict[str, Any] = dict(

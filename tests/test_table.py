@@ -250,3 +250,137 @@ class Test(unittest.TestCase):
             assert t[-2][-2] == "Uncommon"
 
             assert len(page.extract_tables({"vertical_strategy": "lines_strict"})) == 0
+
+    def test_span_grid_merged_headers(self):
+        path = os.path.join(HERE, "pdfs/span-table-example.pdf")
+        with pdfplumber.open(path) as pdf:
+            table = pdf.pages[0].find_table()
+            span = table.span_grid({"header_rows": 2})
+
+        # Grid dimensions come from clustered native boundaries.
+        assert (span.n_rows, span.n_cols) == (5, 6)
+
+        # Top-left header cell spans both header rows.
+        top_left = span.cell_at(0, 0)
+        assert top_left is not None
+        assert (top_left.row, top_left.col) == (0, 0)
+        assert (top_left.rowspan, top_left.colspan) == (2, 1)
+        assert top_left.text == "Region"
+
+        # "Q1" and "Q2" are horizontal merges of three and two columns.
+        q1 = span.cell_at(0, 1)
+        q2 = span.cell_at(0, 4)
+        assert q1 is not None and q2 is not None
+        assert (q1.rowspan, q1.colspan) == (1, 3)
+        assert (q2.rowspan, q2.colspan) == (1, 2)
+
+        # Covered positions point back at their anchor and carry no text.
+        covered = span.position(0, 2)
+        assert covered.kind == "covered"
+        assert covered.source is q1
+        assert covered.to_dict()["text"] is None
+
+    def test_span_grid_header_paths(self):
+        path = os.path.join(HERE, "pdfs/span-table-example.pdf")
+        with pdfplumber.open(path) as pdf:
+            span = pdf.pages[0].find_table().span_grid({"header_rows": 2})
+
+        headers = {h.col: h for h in span.headers()}
+        assert headers[0].key == "Region"
+        assert headers[0].path == ("Region", None)
+        assert headers[1].key == "Q1 / Sales"
+        assert headers[2].key == "Q1 / Cost"
+        assert headers[3].key == "Q1 / Profit"
+        assert headers[4].key == "Q2 / Sales"
+        assert headers[5].key == "Q2 / Cost"
+
+        # A repeated leaf name under different parents stays distinguishable.
+        assert headers[1].key != headers[4].key
+
+    def test_span_grid_records_emit_merge_once(self):
+        path = os.path.join(HERE, "pdfs/span-table-example.pdf")
+        with pdfplumber.open(path) as pdf:
+            page = pdf.pages[0]
+            span = page.find_table().span_grid({"header_rows": 2})
+            exported = page.extract_table_with_spans(span_settings={"header_rows": 2})
+
+        # The merged amount is anchored once, spanning two rows.
+        merged = span.cell_at(3, 5)
+        assert merged is not None
+        assert merged.bbox == (450, 232, 530, 292)
+        assert (merged.rowspan, merged.colspan) == (2, 1)
+        assert merged.text == "999"
+
+        assert span.position(4, 5).kind == "covered"
+        assert span.position(4, 5).source is merged
+
+        values = [record["text"] for record in exported["data"]]
+        assert values.count("999") == 1
+
+        record = next(r for r in exported["data"] if r["text"] == "999")
+        assert record["rowspan"] == 2
+        assert record["covered"] == [[4, 5]]
+        assert record["header_keys"] == ["Q2 / Cost"]
+
+    def test_span_grid_missing_position(self):
+        path = os.path.join(HERE, "pdfs/span-table-missing-example.pdf")
+        with pdfplumber.open(path) as pdf:
+            span = pdf.pages[0].find_table().span_grid({"header_rows": 2})
+
+        missing = span.position(4, 5)
+        assert missing.kind == "missing"
+        assert missing.source is None
+        assert missing.to_dict()["text"] is None
+
+        # Orphan text in a position with no native cell is surfaced, not lost.
+        kinds = {conflict.kind for conflict in span.conflicts}
+        assert "unassigned_text" in kinds
+        unassigned = next(c for c in span.conflicts if c.kind == "unassigned_text")
+        assert unassigned.positions == [(4, 5)]
+
+    def test_span_grid_geometry_conflict(self):
+        from pdfplumber.table_spans import span_grid
+
+        class FakePage:
+            chars = []
+
+            def __init__(self, bbox):
+                self.bbox = bbox
+
+        class FakeTable:
+            page = FakePage((0, 0, 200, 200))
+
+            def __init__(self):
+                # Two cells whose rectangles overlap ambiguously.
+                self.cells = [(0, 0, 100, 50), (50, 0, 150, 50)]
+
+            @property
+            def bbox(self):
+                return (0, 0, 150, 50)
+
+        result = span_grid(FakeTable())
+        kinds = [conflict.kind for conflict in result.conflicts]
+        assert "overlap" in kinds
+        overlap = next(c for c in result.conflicts if c.kind == "overlap")
+        assert (0, 1) in overlap.positions
+
+    def test_span_grid_settings_validation(self):
+        path = os.path.join(HERE, "pdfs/span-table-example.pdf")
+        with pdfplumber.open(path) as pdf:
+            table = pdf.pages[0].find_table()
+            with pytest.raises(ValueError):
+                table.span_grid({"header_rows": -1})
+            with pytest.raises(ValueError):
+                table.span_grid({"header_rows": 99})
+            # Legacy 2-D extraction is unchanged.
+            legacy = table.extract()
+            assert legacy[0][0] == "Region"
+            assert legacy[3][5] == "999"
+
+    def test_span_json_serializable(self):
+        path = os.path.join(HERE, "pdfs/span-table-example.pdf")
+        with pdfplumber.open(path) as pdf:
+            span = pdf.pages[0].find_table().span_grid({"header_rows": 2})
+            payload = span.to_json()
+        assert '"header_rows": 2' in payload
+        assert '"kind": "covered"' in payload

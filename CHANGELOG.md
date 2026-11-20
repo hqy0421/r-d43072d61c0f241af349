@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. The format is based on [Keep a Changelog](http://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- Add span-aware table export for tables with merged cells. `Table.span_grid(...)` reconstructs an explicit grid from the native cell rectangles, recording every position's coordinates, row/column span, and covering cell, and distinguishing empty cells, covered (merged) positions, and positions with no cell at all. `Table.extract_spans(...)`, `Page.extract_tables_with_spans(...)`, and `Page.extract_table_with_spans(...)` return a JSON-serializable export in which merged cells appear once. Given `header_rows`, multi-level header paths are produced for each data column, with identical columns disambiguated. Geometric conflicts are reported explicitly. The existing `extract_table` / `extract_tables` 2-D output is unchanged.
+
 ## [0.11.10] — 2026-06-14
 
 ### Changed

@@ -448,6 +448,71 @@ Both `vertical_strategy` and `horizontal_strategy` accept the following options:
 
 - Table extraction for `pdfplumber` was radically redesigned for `v0.5.0`, and introduced breaking changes.
 
+### Table cells with merged cells (spans)
+
+The default `extract_table` / `extract_tables` methods return a plain
+two-dimensional list of strings. That representation cannot distinguish three
+different situations that all look like an empty string or a `None`:
+
+- an empty cell (a native rectangle with no text),
+- a grid position for which no native rectangle exists, and
+- a position covered by a merged (spanning) neighbour.
+
+For tables with merged cells, use the span-aware export. It reconstructs an
+explicit grid from the native cell rectangles, and records, for every position,
+the row/column coordinates, the row and column span of its cell, and which cell
+covers it. Text is still extracted from the native rectangles, so a merged
+amount is emitted exactly once — never as a zero and never duplicated into the
+positions it covers.
+
+```python
+pdf = pdfplumber.open("path/to/tables-with-merges.pdf")
+page = pdf.pages[0]
+
+# Span-aware export of the largest table, as a JSON-serializable dict.
+export = page.extract_table_with_spans(span_settings={"header_rows": 2})
+
+export["headers"]   # multi-level header path per data column
+export["rows"]      # grid[position] -> kind, rowspan/colspan, text, coverage
+export["data"]      # one record per native cell, merges included once
+export["conflicts"] # geometric inconsistencies, reported rather than hidden
+```
+
+Every grid position has a `kind`:
+
+| `kind` | Meaning |
+|--------|---------|
+| `"anchor"` | The top-left position of a native cell. Carries the cell's text. |
+| `"covered"` | Covered by a merged neighbour. `text` is `None`; `covered_by` names the anchor. |
+| `"missing"` | No native rectangle covers this position. Not the same as an empty cell. |
+| `"conflict"` | More than one native cell claims this position. |
+
+The multi-level header paths are built from the first `header_rows` grid rows.
+A vertical merge (e.g. a label spanning both header rows) appears once; a
+horizontal merge (a parent header spanning several columns) is repeated through
+`labels`, so distinct leaf columns remain distinguishable via `path` and `key`.
+When two columns share an identical path, their `key` values are disambiguated
+(`"Amount"`, `"Amount #2"`, …).
+
+Lower-level access is also available:
+
+| Method | Description |
+|--------|-------------|
+| `Table.span_grid(span_settings={})` | Returns a `SpanTable` with `.cells`, `.grid`, `.headers()`, `.data_records()`, `.conflicts`, `.to_dict()`, and `.to_json()`. |
+| `Table.extract_spans(span_settings={}, **text_settings)` | Shorthand for `span_grid(...).to_dict()`. |
+| `Page.extract_tables_with_spans(table_settings={}, span_settings={})` | Span-aware export for every table on the page. |
+| `Page.extract_table_with_spans(table_settings={}, span_settings={})` | Span-aware export for the largest table on the page. |
+
+`span_settings` accepts `header_rows` (default `0`), `x_tolerance` / `y_tolerance`
+(default `1`; they control how close two cell boundaries must be to be treated
+as the same grid line), and any `text_*` key (forwarded to text extraction).
+Geometric conflicts — overlapping cells, duplicate rectangles, positions with
+no cell, cells that cross the header/data boundary, and text sitting in a
+position no cell covers — are listed in `export["conflicts"]` rather than being
+silently dropped.
+
+The original `extract_table` / `extract_tables` behavior is unchanged.
+
 
 ## Extracting form values
 
